@@ -16,12 +16,12 @@ source $ENV_FILE
 
 # 2. Backup Database
 echo "Exporting database..."
-docker compose exec -t $CONTAINER_NAME mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" "$DB_DATABASE" > "$BACKUP_DIR/$TIMESTAMP/db_backup.sql"
+docker compose exec -t $CONTAINER_NAME mariadb-dump -u root -p"$MYSQL_ROOT_PASSWORD" "$DB_DATABASE" > "$BACKUP_DIR/$TIMESTAMP/db_backup.sql"
 
 # 3. Backup Storage Volume
 echo "Compressing storage volume..."
-# This finds the volume name automatically based on your directory name
-VOLUME_NAME=$(docker volume ls -q | grep "_storage")
+# This finds this project's storage volume specifically (docker compose prefixes it with the project/dir name)
+VOLUME_NAME=$(docker compose config --format json | python3 -c "import json,sys; print(json.load(sys.stdin)['volumes']['storage']['name'])")
 docker run --rm -v "$VOLUME_NAME":/volume -v "$(pwd)/$BACKUP_DIR/$TIMESTAMP":/backup alpine tar czf /backup/storage_backup.tar.gz -C /volume .
 
 # 4. Copy Config Files
