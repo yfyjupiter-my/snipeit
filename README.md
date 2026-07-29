@@ -58,3 +58,33 @@ docker compose pull && docker compose up -d   # upgrade to a new image tag
 To restore: recreate the stack, load `db_backup.sql` into the `db` container, and extract `storage_backup.tar.gz` into the `storage` volume.
 
 Old backup snapshots (`snipeit_db_backup.sql`, `snipeit_storage_backup.tar.gz`) are gitignored and kept locally only.
+
+## Migrate to a new server
+
+Export/import method, using the same `db_backup.sql` + `storage_backup.tar.gz` artifacts `backup.sh` produces.
+
+**On the old server:**
+```bash
+./backup.sh                      # writes ./backups/<timestamp>/
+scp -r backups/<timestamp> newhost:/tmp/snipeit-migration
+```
+
+**On the new server:**
+1. Clone this repo, copy `docker-compose.yml` and `.env` from the backup folder (keeps `APP_KEY`, DB credentials, etc. identical — don't regenerate `APP_KEY`, it decrypts existing DB data).
+2. Update `APP_URL` in `.env` if the hostname changed.
+3. Start just the DB so it initializes its volume, then load the dump:
+   ```bash
+   docker compose up -d db
+   docker compose exec -T db mariadb -u root -p"$MYSQL_ROOT_PASSWORD" "$DB_DATABASE" < /tmp/snipeit-migration/db_backup.sql
+   ```
+4. Restore the storage volume before first app start:
+   ```bash
+   docker compose up -d app   # creates the storage volume
+   docker compose stop app
+   VOLUME_NAME=$(docker volume ls -q | grep "_storage")
+   docker run --rm -v "$VOLUME_NAME":/volume -v /tmp/snipeit-migration:/backup alpine \
+     sh -c "rm -rf /volume/* && tar xzf /backup/storage_backup.tar.gz -C /volume"
+   ```
+5. `docker compose up -d` and verify at the new `APP_URL`.
+
+Point DNS for `assets.maplescraps.com` at the new host and reinstall the Nginx site + TLS cert (see Deploy above) once verified.
