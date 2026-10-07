@@ -25,10 +25,11 @@ echo "Starting Snipe-IT backup for $TIMESTAMP..."
 
 # 1. Backup Database
 # -T: no TTY, so output isn't mangled and it works under cron.
-# The password is read from the container's own env, so it never appears in host argv.
+# The password comes from .env over stdin, not the container's env (stale until the db container is
+# recreated after a rotation), so it never appears in host or container argv.
 echo "Exporting database..."
-docker compose exec -T "$DB_SERVICE" sh -c \
-  'exec mariadb-dump --single-transaction -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+printf '%s' "$MYSQL_ROOT_PASSWORD" | docker compose exec -T "$DB_SERVICE" sh -c \
+  'MYSQL_PWD=$(cat) exec mariadb-dump --single-transaction -u root "$MYSQL_DATABASE"' \
   > "$WORK/db_backup.sql"
 # mariadb-dump writes this footer only when it finishes successfully.
 tail -n 1 "$WORK/db_backup.sql" | grep -q "^-- Dump completed" \
