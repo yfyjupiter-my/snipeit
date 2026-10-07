@@ -11,7 +11,7 @@ Format: **Status** (Accepted / Proposed / Superseded by N) · **Context** · **D
 
 **Status:** Accepted (2026-10-07)
 
-**Context.** `docker-compose.yml` pins `snipe/snipe-it:v6.3.4` and `mariadb:11.4.7`. A floating tag
+**Context.** `docker-compose.yml` pins `snipe/snipe-it:v8.8.0` and `mariadb:11.4.7`. A floating tag
 (`latest`, `v6`) would let a `docker compose pull` apply database migrations nobody planned for,
 and a Snipe-IT migration can't be rolled back without restoring a backup.
 
@@ -25,8 +25,7 @@ and a Snipe-IT migration can't be rolled back without restoring a backup.
 4. Rollback means restoring the backup from step 1 with the old tag, not reverting the tag alone.
 
 **Consequences.** No surprise upgrades, but upgrades don't happen unless someone does them.
-v6.3.4 is behind current major releases, so the v7 upgrade is due. It should get its own entry here
-when it's done.
+The v6 → v8 upgrade is recorded in entry 5.
 
 ---
 
@@ -96,3 +95,29 @@ versions and doesn't need the database stopped.
 **Consequences.** Restores follow `summary.md`. The script doesn't manage retention on the
 off-site side, and no alert fires on failure: check `backups/backup.log`. Until `OFFSITE_DEST` is
 set, losing the disk means losing both the data and its backups.
+
+---
+
+## 5. Upgrade Snipe-IT v6.3.4 → v8.8.0 in one step
+
+**Status:** Done (2026-10-07)
+
+**Context.** v6.3.4 was two major versions behind. v8.8.0 (2026-09-30) alone fixes 59 reported
+security issues. The v7 and v8 release notes only call out PHP version requirements, which the
+Docker image covers, and a CSS fix for reverse proxies, which doesn't apply here because `APP_URL`
+points straight at `http://192.168.100.64:8000`.
+
+**Decision.** The jump went straight from v6.3.4 to v8.8.0, against step 2 of entry 1, which says
+to stop at v7 first. It wasn't a deliberate choice to skip the procedure. The image runs
+`php artisan migrate --force` on startup, so the schema migrated as soon as the container started.
+
+- Backup taken first: `backups/20261007_105504`.
+- Migrations: 371 → 488 rows in `migrations`, no errors in the app log, `migrate:status` shows
+  none pending.
+- Row counts unchanged before and after: assets 51, users 32, licenses 6, accessories 2,
+  action_logs 331.
+- `/login` returns 200 and the stylesheet loads.
+
+**Consequences.** Going back to v6.3.4 means restoring `backups/20261007_105504` with the old
+tag; changing the tag alone won't work. Future upgrades follow entry 1 again, one major version
+at a time.
