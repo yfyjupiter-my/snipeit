@@ -59,32 +59,151 @@ To restore: recreate the stack, load `db_backup.sql` into the `db` container, an
 
 Old backup snapshots (`snipeit_db_backup.sql`, `snipeit_storage_backup.tar.gz`) are gitignored and kept locally only.
 
-## Migrate to a new server
+## Migrate to a new server (Ubuntu 26.04)
 
-Export/import method, using the same `db_backup.sql` + `storage_backup.tar.gz` artifacts `backup.sh` produces.
+Export/import of the `db_backup.sql` + `storage_backup.tar.gz` artifacts `backup.sh` produces.
+Nothing in the DB or storage volume is host-specific, so this is a copy, not a rebuild.
 
-**On the old server:**
+Plan for ~15 min of downtime at step 5. Keep the old server running and untouched
+until step 8 passes — that is the rollback.
+
+### 1. New server prerequisites
+
 ```bash
-./backup.sh                      # writes ./backups/<timestamp>/
+sudo apt update && sudo apt install -y ca-certificates curl nginx
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/ubuntu $CODENAME stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo usermod -aG docker $USER   # log out and back in for this to take effect
+```
+
+If `apt update` 404s on the Docker repo, 26.04's codename isn't published there yet.
+Either swap `$CODENAME` for the previous LTS (`noble`) in `docker.list`, or use Ubuntu's
+own packages instead: `sudo apt install -y docker.io docker-compose-v2`.
+
+Verify before continuing:
+```bash
+docker run --rm hello-world && docker compose version
+```
+
+### 2. Take a fresh backup on the old server
+
+```bash
+cd ~/Documents/snipeit
+bash backup.sh
 scp -r backups/<timestamp> newhost:/tmp/snipeit-migration
 ```
 
-**On the new server:**
-1. Clone this repo, copy `docker-compose.yml` and `.env` from the backup folder (keeps `APP_KEY`, DB credentials, etc. identical — don't regenerate `APP_KEY`, it decrypts existing DB data).
-2. Update `APP_URL` in `.env` if the hostname changed.
-3. Start just the DB so it initializes its volume, then load the dump:
-   ```bash
-   docker compose up -d db
-   docker compose exec -T db mariadb -u root -p"$MYSQL_ROOT_PASSWORD" "$DB_DATABASE" < /tmp/snipeit-migration/db_backup.sql
-   ```
-4. Restore the storage volume before first app start:
-   ```bash
-   docker compose up -d app   # creates the storage volume
-   docker compose stop app
-   VOLUME_NAME=$(docker volume ls -q | grep "_storage")
-   docker run --rm -v "$VOLUME_NAME":/volume -v /tmp/snipeit-migration:/backup alpine \
-     sh -c "rm -rf /volume/* && tar xzf /backup/storage_backup.tar.gz -C /volume"
-   ```
-5. `docker compose up -d` and verify at the new `APP_URL`.
+`<timestamp>` is printed by the script. The folder holds `db_backup.sql`,
+`storage_backup.tar.gz`, `.env` and `docker-compose.yml`.
 
-Point DNS for `assets.maplescraps.com` at the new host and reinstall the Nginx site + TLS cert (see Deploy above) once verified.
+`.env` and the dump contain credentials — `scp` directly between hosts as above,
+don't stage them anywhere shared, and delete `/tmp/snipeit-migration` at step 9.
+
+### 3. Lay out the project on the new server
+
+```bash
+mkdir -p ~/Documents && cd ~/Documents
+git clone git@github.com:yfyjupiter-my/snipeit.git
+cd snipeit
+cp /tmp/snipeit-migration/.env /tmp/snipeit-migration/docker-compose.yml .
+chmod 600 .env
+```
+
+Copy `.env` from the backup rather than rebuilding it from `example.env`. **Do not
+regenerate `APP_KEY`** — it decrypts data already in the DB, and a new key makes that
+data unreadable. Keep the directory name `snipeit`: Compose derives volume names
+(`snipeit_db_data`, `snipeit_storage`) from it.
+
+Only edit `APP_URL` if the hostname is changing. Same hostname → change nothing.
+
+### 4. Restore the database
+
+```bash
+set -a; source .env; set +a      # exports MYSQL_ROOT_PASSWORD / DB_DATABASE for the shell
+docker compose up -d db
+docker compose exec db healthcheck.sh --connect --innodb_initialized && echo "db ready"
+docker compose exec -T db mariadb -u root -p"$MYSQL_ROOT_PASSWORD" "$DB_DATABASE" \
+  < /tmp/snipeit-migration/db_backup.sql
+```
+
+Sanity check — asset count should match the old server:
+```bash
+docker compose exec db mariadb -u root -p"$MYSQL_ROOT_PASSWORD" "$DB_DATABASE" \
+  -e "SELECT COUNT(*) FROM assets;"
+```
+
+### 5. Restore the storage volume
+
+Create the volume without starting the app, so nothing writes to it before the restore:
+
+```bash
+docker compose create app
+VOLUME_NAME=$(docker compose config --format json \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['volumes']['storage']['name'])")
+docker run --rm -v "$VOLUME_NAME":/volume -v /tmp/snipeit-migration:/backup alpine \
+  sh -c "rm -rf /volume/* && tar xzf /backup/storage_backup.tar.gz -C /volume"
+```
+
+`rm -rf /volume/*` is destructive — it is correct only on a volume you just created.
+Never run this step against a server already holding real uploads.
+
+### 6. Start the stack
+
+```bash
+docker compose up -d
+docker compose logs -f app       # watch until it settles, then Ctrl-C
+curl -I http://127.0.0.1:${APP_PORT:-8000}
+```
+
+Expect a `200` or a `302` to the login page. A `500` here is almost always a wrong
+`APP_KEY` or a DB the dump didn't load into — recheck steps 3 and 4.
+
+### 7. Nginx and TLS
+
+Issue the cert first (needs DNS pointing here, or use a DNS-01 challenge to avoid
+downtime), then install the site:
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot certonly --nginx -d assets.maplescraps.com
+sudo cp assets.maplescraps.com.nginx /etc/nginx/sites-available/assets.maplescraps.com
+sudo ln -s /etc/nginx/sites-available/assets.maplescraps.com /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The shipped config points at `/etc/letsencrypt/live/maplescraps.com/`. If certbot
+writes to `/etc/letsencrypt/live/assets.maplescraps.com/` instead, update the two
+`ssl_certificate*` paths to match. Check the firewall allows 80/443
+(`sudo ufw allow 'Nginx Full'` if ufw is active).
+
+### 8. Cut over
+
+1. Lower the DNS TTL for `assets.maplescraps.com` a day ahead if you can.
+2. Before flipping DNS, test the new host directly:
+   `curl -k --resolve assets.maplescraps.com:443:<new-ip> https://assets.maplescraps.com/`
+3. Log in, check assets, users, and that an uploaded image/attachment loads
+   (that last one proves the storage volume restore worked).
+4. Point DNS at the new IP.
+5. Stop the old stack once traffic has moved and a day has passed: `docker compose down`
+   on the old host. Keep its volumes until you are confident.
+
+Any data entered on the old server after step 2 is lost — stop using it from then on,
+or redo steps 2/4/5 at cutover.
+
+### 9. Finish up
+
+```bash
+rm -rf /tmp/snipeit-migration        # contains .env and the DB dump
+sudo certbot renew --dry-run         # confirm auto-renewal works on the new host
+bash backup.sh                       # first backup on the new host
+crontab -e                           # e.g. 0 2 * * * cd ~/Documents/snipeit && bash backup.sh
+```
+
+Docker's `restart: unless-stopped` brings the stack back after reboot; no systemd unit
+needed. Push backups off the machine — a backup on the box it protects isn't a backup.
