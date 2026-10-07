@@ -55,6 +55,16 @@ docker compose pull && docker compose up -d   # upgrade to a new image tag
 ./backup.sh
 ```
 
+It exits non-zero on any failure, verifies the dump finished (`-- Dump completed` footer) and the
+tarball is readable, and never leaves a half-written folder behind. Settings in `.env`:
+
+- `BACKUP_RETENTION_DAYS` (default `30`) / `BACKUP_MIN_KEEP` (default `7`): backups older than the
+  retention are deleted, but the newest N are always kept, so a stretch of failed runs can't prune
+  everything.
+- `OFFSITE_DEST`: rsync target (e.g. `user@backup-host:/srv/snipeit-backups`) for an off-site copy.
+  Needs passwordless SSH from this host. If empty, the script warns that the backup is local only.
+  Retention on the off-site side is not managed by this script.
+
 To restore: recreate the stack, load `db_backup.sql` into the `db` container, and extract `storage_backup.tar.gz` into the `storage` volume.
 
 Old backup snapshots (`snipeit_db_backup.sql`, `snipeit_storage_backup.tar.gz`) are gitignored and kept locally only.
