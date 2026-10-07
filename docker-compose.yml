@@ -6,7 +6,7 @@ volumes:
 
 services:
   app:
-    image: snipe/snipe-it:v8.8.0
+    image: snipe/snipe-it:v6.3.4
     restart: unless-stopped
     volumes:
       - storage:/var/lib/snipeit
