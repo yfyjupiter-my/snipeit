@@ -181,8 +181,70 @@ docker run --rm -v snipeit_storage:/volume -v "$PWD/$B":/backup:ro alpine \
 docker compose up -d
 ```
 
-## 7. Still to do
+## 7. Automatic daily backup (cron job)
+
+A **cron job** is a command that Linux runs automatically on a schedule. We added one
+that runs `backup.sh` every night at **2:00 AM** (server time zone: Asia/Kuala_Lumpur).
+
+### How it was added
+
+```bash
+crontab -e          # opens your personal schedule in an editor
+```
+
+Then add this line:
+
+```
+0 2 * * * cd /home/ubuntu/Documents/snipeit && bash backup.sh >> /home/ubuntu/Documents/snipeit/backups/backup.log 2>&1
+```
+
+How to read it:
+- `0 2 * * *` is the schedule: minute 0, hour 2, every day, every month, every weekday.
+  The five fields are `minute hour day-of-month month day-of-week`.
+- `cd /home/ubuntu/Documents/snipeit` comes first because `backup.sh` saves to
+  `./backups`, a path relative to the folder it runs from.
+- `>> .../backups/backup.log 2>&1` adds the script's messages, including errors, to a
+  log file. Cron has no screen, so without this you could never see what happened.
+
+> **Tip:** cron runs with almost no environment and no terminal. Before trusting a job,
+> test it the same way:
+> `env -i HOME=$HOME PATH=/usr/bin:/bin bash -c 'cd ~/Documents/snipeit && bash backup.sh' </dev/null`
+
+### Where backups are saved
+
+Each run creates a new folder named by date and time:
+
+```
+~/Documents/snipeit/backups/
+├── 20261007_103842/
+│   ├── db_backup.sql          ← the database
+│   ├── storage_backup.tar.gz  ← uploaded files
+│   ├── .env                   ← settings + passwords (keep private!)
+│   └── docker-compose.yml
+└── backup.log                 ← messages from every cron run
+```
+
+### Useful commands
+
+```bash
+crontab -l                                   # show scheduled jobs
+ls -lt ~/Documents/snipeit/backups/          # newest backups first
+tail ~/Documents/snipeit/backups/backup.log  # did last night's run work?
+```
+
+### Things to know
+
+- The backups are on the **same disk** as Snipe-IT. Copy them to another machine
+  from time to time, because a backup on the box it protects isn't a backup.
+- Old backups are **not** deleted automatically: the cleanup line in `backup.sh` is
+  commented out. Each one is about 0.6 MB.
+- The `backups/` folder is excluded from git because it contains passwords.
+
+---
+
+## 8. Still to do
 
 - Log in and open an asset with a picture, to confirm the files work.
-- Nginx and TLS, DNS cutover, and a backup cron job: README steps 7–9.
+- Nginx and TLS, and DNS cutover: README steps 7–8. These are only needed if
+  people should reach Snipe-IT at `https://assets.maplescraps.com`.
 - Change `APP_URL` in `.env` when moving to `assets.maplescraps.com`, then run `docker compose up -d`.
