@@ -28,6 +28,13 @@ and a Snipe-IT migration can't be rolled back without restoring a backup.
 v6.3.4 is behind current major releases, so the v7 upgrade is due. It should get its own entry here
 when it's done.
 
+After a change of major version in either direction, browsers that visited the site under the other
+version can get a 500 on every page until they clear the site's cookies. v6.3.4 (Laravel 8) expects
+serialized cookie values, while v8.8.0's newer Laravel stores them as plain strings. The same
+`APP_KEY` decrypts them, then `unserialize()` fails in `EncryptCookies`. Seen on the v8.8.0 → v6.3.4
+rollback (2026-10-07). Tell users to clear their cookies, or use a private window, when you announce
+an upgrade or rollback.
+
 ---
 
 ## 2. TLS terminates in Nginx on the host, not in a container
