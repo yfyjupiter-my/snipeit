@@ -9,6 +9,8 @@ Docker Compose deployment of [Snipe-IT](https://snipeitapp.com/) (asset manageme
 - Uploaded files in `storage` volume
 - Nginx reverse proxy with TLS (Let's Encrypt) — config in `assets.maplescraps.com.nginx`
 
+Why things are set up this way: [`docs/decisions.md`](docs/decisions.md).
+
 ## Deploy
 
 1. Copy `example.env` to `.env` and fill in real values (see Configure below).
